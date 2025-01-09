@@ -31,6 +31,8 @@ class ScheduleData(TypedDict):
         natural_twilight_end (ScheduleEntry): The natural twilight end schedule entry
         bed_time (ScheduleEntry): The bed time schedule entry
         night_time (ScheduleEntry): The night time schedule entry
+        update_time (str): The time of day to update the schedule (HH:MM format)
+        update_time_unix (int): Unix timestamp for the next schedule update
     """
     mode: Literal['dayNight', 'scheduled', 'demo']
     schedule: list[ScheduleEntry]
@@ -42,3 +44,5 @@ class ScheduleData(TypedDict):
     natural_twilight_end: ScheduleEntry
     bed_time: ScheduleEntry
     night_time: ScheduleEntry
+    update_time: str
+    update_time_unix: int

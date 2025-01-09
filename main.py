@@ -174,17 +174,6 @@ def generate_brightness_steps(
         yield warm_brightness, cool_brightness, step_delay
 
 
-def night_light():
-    # Dim warm light
-    log_to_aws(
-        message="Starting night light mode",
-        level="DEBUG",
-    )
-
-    warm_leds.duty_u16(get_duty_for_brightness(config.NIGHT_LIGHT_BRIGHTNESS))
-    cool_leds.duty_u16(0)
-
-
 def get_transition_duration(entry: ScheduleEntry) -> int:
     """
     Calculates the duration until the schedule entry's time in seconds.
@@ -240,20 +229,6 @@ def run_lighting_transition(entry: ScheduleEntry):
         message=f"Completed transition to {entry['time']}",
         level="DEBUG"
     )
-
-def sunrise():
-    """Warm lights increase to full warm brightness."""
-    if not schedule_data:
-        # Fallback to default behavior if no schedule data
-        log_to_aws(
-            message="No schedule data, using default sunrise settings",
-            level="WARNING"
-        )
-        # ...existing sunrise code...
-        return
-        
-    run_lighting_transition(schedule_data["sunrise"])
-
 
 def run_schedule_list():
     """
@@ -339,24 +314,40 @@ def has_future_events() -> bool:
         return False
 
 
+def night_light():
+    # Dim warm light
+    log_to_aws(
+        message="Starting night light mode",
+        level="DEBUG",
+    )
+
+    warm_leds.duty_u16(get_duty_for_brightness(config.NIGHT_LIGHT_BRIGHTNESS))
+    cool_leds.duty_u16(0)
+
+
 def run_scheduled_tasks():
     """
         Main task scheduler that updates the schedule if needed 
         and runs the specified light mode.
     """
-
     # Check if we need to fetch a new schedule
-    if not schedule_data or not has_future_events():
-        log_to_aws(
-            message="No future events found, fetching new schedule",
-            level="INFO"
-        )
+    if not schedule_data:
         if not fetch_schedule():
+            log_to_aws(
+                message="Schedule fetch failed from run_scheduled_task.",
+                level="WARNING"
+            )
             night_light()  # Fallback to safe mode if fetch fails
             return
     
-    # Run the appropriate lighting mode based on schedule data
+    elif not has_future_events():
+        # If no future events, wait until the next update time
+        if time.time() < schedule_data["update_time_unix"]:
+            time.sleep(schedule_data["update_time_unix"] - time.time())
+            return
+    
     elif schedule_data["mode"] == "scheduled":
+         # Run the appropriate lighting mode based on schedule data
         run_schedule_list()
     
     elif schedule_data["mode"] == "dayNight":
