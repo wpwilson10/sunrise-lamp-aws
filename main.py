@@ -331,20 +331,13 @@ def run_scheduled_tasks():
         and runs the specified light mode.
     """
     # Check if we need to fetch a new schedule
-    if not schedule_data:
-        if not fetch_schedule():
-            log_to_aws(
-                message="Schedule fetch failed from run_scheduled_task.",
-                level="WARNING"
-            )
-            night_light()  # Fallback to safe mode if fetch fails
-            return
-    
-    elif not has_future_events():
-        # If no future events, wait until the next update time
-        if time.time() < schedule_data["update_time_unix"]:
+    if not schedule_data or not has_future_events():
+         # If no future events, wait until the next update time
+        if schedule_data and time.time() < schedule_data["update_time_unix"]:
             time.sleep(schedule_data["update_time_unix"] - time.time())
-            return
+        
+        # get new schedule
+        fetch_schedule()
     
     elif schedule_data["mode"] == "scheduled":
          # Run the appropriate lighting mode based on schedule data
