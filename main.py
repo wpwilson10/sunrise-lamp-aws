@@ -88,7 +88,7 @@ def fetch_schedule():
     try:
         headers = {
             "content-type": "application/json",
-            "authorization": config.SCHEDULE_API_TOKEN
+            "x-custom-auth": config.AWS_SECRET_TOKEN,
         }
         
         response = requests.get(config.SCHEDULE_API_URL, headers=headers)

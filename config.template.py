@@ -37,5 +37,3 @@ AWS_SECRET_TOKEN = "my_secure_static_token_12345"
 # Schedule API Configuration
 # URL endpoint for fetching lighting schedules
 SCHEDULE_API_URL = "https://api.example.com/schedule"
-# Authentication token for schedule API access
-SCHEDULE_API_TOKEN = "your_auth_token"
