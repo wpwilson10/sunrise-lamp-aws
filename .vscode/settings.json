@@ -1,10 +1,10 @@
 {
-	"python.languageServer": "Pylance",
-	"python.analysis.typeCheckingMode": "basic",
-	"python.analysis.typeshedPaths": ["typings", ".venv/Lib/site-package"],
-	"python.analysis.diagnosticSeverityOverrides": {
-		"reportMissingModuleSource": "none"
-	},
-	"python.analysis.inlayHints.variableTypes": true,
-	"python.analysis.inlayHints.functionReturnTypes": true
+  "python.languageServer": "Pylance",
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.typeshedPaths": ["typings", ".venv/Lib/site-packages"],
+  "python.analysis.extraPaths": ["typings"],
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportMissingModuleSource": "none",
+    "reportMissingImports": "none"
+  }
 }
