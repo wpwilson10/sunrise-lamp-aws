@@ -1,41 +1,82 @@
-# Sunrise_Lamp
+# Sunrise Lamp Controller
 
-MicroPython code for implementing an LED lighting control system using a Pi Pico W to simulate natural lighting cycles.
+MicroPython-based smart lighting system that simulates natural daylight cycles using warm and cool LED channels. Designed for Raspberry Pi Pico W with cloud-based scheduling and logging.
 
 ## Description
 
-This project implements a smart lighting control system designed to simulate natural lighting cycles. The system controls two LED channels (warm and cool), transitions smoothly between lighting states, and integrates with cloud services for logging. It uses a microcontroller (e.g., Raspberry Pi Pico W) running MicroPython.
+This project creates a biologically-friendly lighting system that mimics natural daylight patterns. It manages dual-channel LED lighting (warm and cool white) to simulate the color temperature changes throughout the day, from pre-dawn through sunset and into night.
+
+The system fetches dynamic lighting schedules from a cloud API, allowing for seasonal adjustments and custom scheduling. All events are logged to AWS for monitoring and debugging.
 
 ### Features
 
-Smooth brightness transitions for warm and cool LEDs simulating sunrise and sunset.
+- **Dynamic Light Control**
 
-Automatically calculates sunset and timezone offsets using internet APIs given the configured coordinate location.
+  - Smooth transitions between lighting states
+  - Gamma-corrected PWM brightness control
+  - Dual-channel warm/cool LED management
+  - IEEE 1789-2015 compliant PWM frequency
 
-Multiple lighting modes:
+- **Multiple Operating Modes**
 
--   night light: consistent dim warm lighting
--   sunrise: warm lights increase in brightness
--   daylight: cool lights power on and increase to full brightness
--   sunset: cool lights dim until just warm lights are powered
--   bedtime: warm lights dim
+  - `dayNight`: Follows natural daylight patterns
+  - `scheduled`: User-defined custom schedules
+  - `demo`: Quick demonstration cycle
+  - Fallback night light mode for safety
 
-Scheduled tasks to update lighting modes dynamically.
+- **Smart Scheduling**
 
-Logs events and errors to AWS via a URL endpoint.
+  - Cloud-based schedule management
+  - Automatic schedule updates
+  - Handles timezone and DST changes
+  - Supports multiple daily events:
+    - Civil twilight transitions
+    - Sunrise/sunset simulation
+    - Custom bed time dimming
+    - Night light mode
+
+- **Cloud Integration**
+  - RESTful API for schedule updates
+  - AWS Lambda-based event logging
+  - Error reporting and monitoring
+  - Status tracking and debugging
 
 ## Setup
 
+### Hardware Requirements
+
+- Raspberry Pi Pico W
+- Warm white LED strip/array
+- Cool white LED strip/array
+- PWM-capable MOSFETs for LED control
+- 12/24V power supply (sized for LED load)
+
 ### Configuration
 
-Copy the microcontroller/config.template.py into a config.py file and update with preferred settings.
+1. Copy `config.template.py` to `config.py`
+2. Configure required settings:
 
-Required variables:
+```python
+# Network Settings
+WIFI_SSID = "your_network"
+WIFI_PASSWORD = "your_password"
 
--   AWS_LOG_URL - the API endpoint that logs messages from the microcontroller
--   AWS_SECRET_TOKEN - this should match secret_token above
--   WIFI_SSID
--   WIFI_PASSWORD
+# Cloud Integration
+AWS_LOG_URL = "your_lambda_endpoint"
+AWS_SECRET_TOKEN = "your_secret_token"
+SCHEDULE_API_URL = "your_schedule_api"
+
+# Hardware Configuration
+WARM_LED_PIN = 10  # PWM capable GPIO
+COOL_LED_PIN = 20  # PWM capable GPIO
+```
+
+Optional settings to tune behavior:
+
+- `PWM_FREQUENCY`: LED refresh rate (default 8000Hz)
+- `STEPS_MULTIPLIER`: Transition smoothness
+- `MAX_STEPS`: CPU usage limit
+- `NIGHT_LIGHT_BRIGHTNESS`: Default safety light level
 
 ### Pi Pico Installation
 
