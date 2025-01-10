@@ -59,16 +59,21 @@ def log_to_aws(message: str, level: str = "INFO") -> None:
     # Lowercase is important for HTTP 2 protocol
     headers: dict[str, str] = {
         "content-type": "application/json",
-        "x-custom-auth": config.AWS_SECRET_TOKEN,
+        "x-custom-auth": config.AWS_LOGGING_SECRET_TOKEN,
     }
-    payload: dict[str, str] = {"message": message, "level": level}
+    payload: dict[str, str] = {
+        "message": message, 
+        "level": level, 
+        "service_name": "sunrise-lamp-aws", 
+        "client_name": config.CLIENT_NAME
+    }
 
     try:
         # Convert payload to a JSON string
         # MicroPython's requests module does not handle conversions automatically.
         json_payload = json.dumps(payload)
         # Send the POST request with the JSON string
-        response = requests.post(config.AWS_LOG_URL, data=json_payload, headers=headers)
+        response = requests.post(config.AWS_LOGGING_API, data=json_payload, headers=headers)
 
         # Check the response status
         if response.status_code == 200:
@@ -100,10 +105,10 @@ def fetch_schedule():
     try:
         headers = {
             "content-type": "application/json",
-            "x-custom-auth": config.AWS_SECRET_TOKEN,
+            "x-custom-auth": config.AWS_LIGHTS_SECRET_TOKEN,
         }
         
-        response = requests.get(config.SCHEDULE_API_URL, headers=headers)
+        response = requests.get(config.AWS_LIGHT_SCHEDULE_API, headers=headers)
         
         if response.status_code == 200:
             schedule_data = ScheduleData(**response.json())  # Type validation
