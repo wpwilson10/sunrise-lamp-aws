@@ -1,3 +1,6 @@
+# Name of the client device for identification when logging
+CLIENT_NAME = "Sunrise Lamp"  # Name of the device
+
 # WiFi Credentials
 WIFI_SSID = "wifi_name"        # Network name to connect to
 WIFI_PASSWORD = "wifi_password" # Network password
@@ -30,10 +33,10 @@ NIGHT_LIGHT_BRIGHTNESS = 0.25  # 25% brightness
 
 # AWS Lambda Configuration
 # URL endpoint for sending log messages
-AWS_LOG_URL = "https://xyz.lambda-url.us-east-1.on.aws/"
-# Authentication token for AWS Lambda access
-AWS_SECRET_TOKEN = "my_secure_static_token_12345"
-
-# Schedule API Configuration
+AWS_LOGGING_API = "https://api.example.com/logging"
+# Authentication token for AWS Lambda logging
+AWS_LOGGING_SECRET_TOKEN = "my_secret_token"
 # URL endpoint for fetching lighting schedules
-SCHEDULE_API_URL = "https://api.example.com/schedule"
+AWS_LIGHT_SCHEDULE_API = "https://api.example.com/lights"
+# Authentication token for AWS Lambda light schedule
+AWS_LIGHTS_SECRET_TOKEN = "my_secret_token"
