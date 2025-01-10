@@ -21,6 +21,11 @@ wifi_connection = None
 schedule_data: ScheduleData | None = None
 
 def connect_wifi():
+    """
+    Establishes WiFi connection using credentials from config.
+    Retries connection until successful.
+    Logs connection status and IP address on success.
+    """
     global wifi_connection
     if wifi_connection and wifi_connection.isconnected():
         return  # Already connected
@@ -80,8 +85,15 @@ def log_to_aws(message: str, level: str = "INFO") -> None:
 
 def fetch_schedule():
     """
-    Fetches the schedule data from the configured AWS API endpoint and stores it globally.
-    Returns True if successful, False otherwise.
+    Fetches lighting schedule data from configured API endpoint.
+    
+    Updates global schedule_data with new schedule if successful.
+    Schedule data includes times, brightness levels, and mode settings
+    for controlling the lighting throughout the day.
+    
+    Returns:
+        bool: True if schedule was successfully fetched and parsed,
+              False if any error occurred
     """
     global schedule_data
     
@@ -119,9 +131,19 @@ def fetch_schedule():
 
 
 def get_duty_for_brightness(v_out: float) -> int:
-    # Returns the duty cycle required for a given desired
-    #   perceived brightness percentage (0.00 - 1.00 e.g. 0.25 for 25%)
-    # Based on https://codeinsecurity.wordpress.com/2023/07/17/the-problem-with-driving-leds-with-pwm/
+    """
+    Converts a perceived brightness value to PWM duty cycle.
+    
+    Uses gamma correction (power of 2.2) to adjust for human perception
+    of LED brightness. Maps 0.0-1.0 range to 0-MAX_DUTY_CYCLE.
+    Based on https://codeinsecurity.wordpress.com/2023/07/17/the-problem-with-driving-leds-with-pwm/
+    
+    Args:
+        v_out (float): Desired brightness between 0.0 and 1.0
+        
+    Returns:
+        int: PWM duty cycle value between 0 and MAX_DUTY_CYCLE
+    """
 
     return round(config.MAX_DUTY_CYCLE * v_out**2.2)
 
@@ -232,8 +254,13 @@ def run_lighting_transition(entry: ScheduleEntry):
 
 def run_schedule_list():
     """
-    Runs through the list of schedule entries in time order.
-    Only processes entries that are in the future.
+    Executes schedule entries in chronological order.
+    
+    Filters out past events, sorts remaining by time,
+    and runs lighting transitions for each future event.
+    Only used in 'scheduled' mode.
+    
+    Note: Requires valid schedule_data global
     """
     if not schedule_data:
         return
@@ -252,8 +279,13 @@ def run_schedule_list():
 
 def run_named_schedule_entries():
     """
-    Runs through the named schedule entries (sunrise, sunset, etc.) in time order.
-    Only processes entries that are in the future.
+    Executes named schedule entries in chronological order.
+    
+    Processes standard daily events (sunrise, sunset, etc.)
+    filtering out past events and sorting by time.
+    Only used in 'dayNight' mode.
+    
+    Note: Requires valid schedule_data global
     """
     if not schedule_data:
         return
@@ -286,10 +318,15 @@ def run_named_schedule_entries():
 
 def has_future_events() -> bool:
     """
-    Checks if there are any future events in the current schedule mode.
+    Checks if current schedule has any future events.
+    
+    For 'scheduled' mode: checks schedule list
+    For 'dayNight' mode: checks named schedule entries
+    Compares event unix_time against current time
     
     Returns:
-        bool: True if future events exist, False otherwise
+        bool: True if any future events exist in current mode,
+              False if no future events or no schedule
     """
     if not schedule_data:
         return False
@@ -325,10 +362,91 @@ def night_light():
     cool_leds.duty_u16(0)
 
 
+def run_demo_cycle():
+    """
+    Runs a compressed day/night demonstration cycle.
+    
+    Simulates a full day in 10 seconds:
+    1. Night → Dawn (2s): Warm up from night light
+    2. Dawn → Morning (2s): Introduce cool light
+    3. Daylight hold (2s): Full brightness
+    4. Evening (2s): Reduce cool light
+    5. Dusk → Night (2s): Dim to night light
+    
+    Used for testing and demonstration purposes
+    """
+    log_to_aws(
+        message="Starting demo light cycle",
+        level="INFO"
+    )
+    
+    # Night to Dawn (dark warm to bright warm)
+    for warm_brightness, cool_brightness, delay in generate_brightness_steps(
+        warm_start=0.25,  # night light level
+        warm_stop=1.0,    # full warm
+        cool_start=0.0,
+        cool_stop=0.0,
+        duration=2        # 2 seconds
+    ):
+        warm_leds.duty_u16(get_duty_for_brightness(warm_brightness))
+        cool_leds.duty_u16(get_duty_for_brightness(cool_brightness))
+        time.sleep(delay)
+        
+    # Dawn to Morning (introduce cool light)
+    for warm_brightness, cool_brightness, delay in generate_brightness_steps(
+        warm_start=1.0,
+        warm_stop=0.75,
+        cool_start=0.0,
+        cool_stop=1.0,
+        duration=2
+    ):
+        warm_leds.duty_u16(get_duty_for_brightness(warm_brightness))
+        cool_leds.duty_u16(get_duty_for_brightness(cool_brightness))
+        time.sleep(delay)
+        
+    # Hold daylight for 2 seconds
+    time.sleep(2)
+        
+    # Evening (reduce cool light)
+    for warm_brightness, cool_brightness, delay in generate_brightness_steps(
+        warm_start=0.75,
+        warm_stop=1.0,
+        cool_start=1.0,
+        cool_stop=0.0,
+        duration=2
+    ):
+        warm_leds.duty_u16(get_duty_for_brightness(warm_brightness))
+        cool_leds.duty_u16(get_duty_for_brightness(cool_brightness))
+        time.sleep(delay)
+        
+    # Dusk to Night (dim warm light to night level)
+    for warm_brightness, cool_brightness, delay in generate_brightness_steps(
+        warm_start=1.0,
+        warm_stop=0.25,
+        cool_start=0.0,
+        cool_stop=0.0,
+        duration=2
+    ):
+        warm_leds.duty_u16(get_duty_for_brightness(warm_brightness))
+        cool_leds.duty_u16(get_duty_for_brightness(cool_brightness))
+        time.sleep(delay)
+    
+    log_to_aws(
+        message="Completed demo light cycle",
+        level="INFO"
+    )
+
 def run_scheduled_tasks():
     """
-        Main task scheduler that updates the schedule if needed 
-        and runs the specified light mode.
+    Main scheduling function that manages lighting updates.
+    
+    Checks schedule validity and mode:
+    - Fetches new schedule if needed
+    - Runs appropriate mode handler (scheduled/dayNight/demo)
+    - Handles schedule transitions and updates
+    - Falls back to night light mode on errors
+    
+    Called periodically by timer to maintain lighting schedule
     """
     # Check if we need to fetch a new schedule
     if not schedule_data or not has_future_events():
@@ -347,10 +465,7 @@ def run_scheduled_tasks():
         run_named_schedule_entries()
     
     elif schedule_data["mode"] == "demo":
-        log_to_aws(
-            message="Demo mode not implemented",
-            level="WARNING"
-        ) 
+        run_demo_cycle()
     else:
         log_to_aws(
             message=f"Unknown schedule mode: {schedule_data['mode']}",
