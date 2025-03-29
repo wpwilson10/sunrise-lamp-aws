@@ -20,6 +20,7 @@ wifi_connection = None
 # Global variable to store the schedule data
 schedule_data: ScheduleData | None = None
 
+
 def connect_wifi():
     """
     Establishes WiFi connection using credentials from config.
@@ -62,10 +63,10 @@ def log_to_aws(message: str, level: str = "INFO") -> None:
         "x-custom-auth": config.AWS_LOGGING_SECRET_TOKEN,
     }
     payload: dict[str, str] = {
-        "message": message, 
-        "level": level, 
-        "service_name": "sunrise-lamp-aws", 
-        "client_name": config.CLIENT_NAME
+        "message": message,
+        "level": level,
+        "service_name": "sunrise-lamp-aws",
+        "client_name": config.CLIENT_NAME,
     }
 
     try:
@@ -73,7 +74,9 @@ def log_to_aws(message: str, level: str = "INFO") -> None:
         # MicroPython's requests module does not handle conversions automatically.
         json_payload = json.dumps(payload)
         # Send the POST request with the JSON string
-        response = requests.post(config.AWS_LOGGING_API, data=json_payload, headers=headers)
+        response = requests.post(
+            config.AWS_LOGGING_API, data=json_payload, headers=headers
+        )
 
         # Check the response status
         if response.status_code == 200:
@@ -91,61 +94,55 @@ def log_to_aws(message: str, level: str = "INFO") -> None:
 def fetch_schedule():
     """
     Fetches lighting schedule data from configured API endpoint.
-    
+
     Updates global schedule_data with new schedule if successful.
     Schedule data includes times, brightness levels, and mode settings
     for controlling the lighting throughout the day.
-    
+
     Returns:
         bool: True if schedule was successfully fetched and parsed,
               False if any error occurred
     """
     global schedule_data
-    
+
     try:
         headers = {
             "content-type": "application/json",
             "x-custom-auth": config.AWS_LIGHTS_SECRET_TOKEN,
         }
-        
+
         response = requests.get(config.AWS_LIGHT_SCHEDULE_API, headers=headers)
-        
+
         if response.status_code == 200:
             schedule_data = ScheduleData(**response.json())  # Type validation
             response.close()
-            
-            log_to_aws(
-                message="Successfully updated schedule data",
-                level="INFO"
-            )
+
+            log_to_aws(message="Successfully updated schedule data", level="INFO")
             return True
         else:
             response.close()
             log_to_aws(
                 message=f"Failed to fetch schedule. Status code: {response.status_code}",
-                level="ERROR"
+                level="ERROR",
             )
             return False
-            
+
     except Exception as e:
-        log_to_aws(
-            message=f"Error fetching schedule: {str(e)}",
-            level="ERROR"
-        )
+        log_to_aws(message=f"Error fetching schedule: {str(e)}", level="ERROR")
         return False
 
 
 def get_duty_for_brightness(v_out: float) -> int:
     """
     Converts a perceived brightness value to PWM duty cycle.
-    
+
     Uses gamma correction (power of 2.2) to adjust for human perception
     of LED brightness. Maps 0.0-1.0 range to 0-MAX_DUTY_CYCLE.
     Based on https://codeinsecurity.wordpress.com/2023/07/17/the-problem-with-driving-leds-with-pwm/
-    
+
     Args:
         v_out (float): Desired brightness between 0.0 and 1.0
-        
+
     Returns:
         int: PWM duty cycle value between 0 and MAX_DUTY_CYCLE
     """
@@ -161,20 +158,20 @@ def generate_brightness_steps(
     duration: int,
 ):
     """Generate brightness values for LED transition.
-    
+
     Args:
         warm_start: Starting warm LED brightness (0.0-1.0)
         warm_stop: Target warm LED brightness (0.0-1.0)
         cool_start: Starting cool LED brightness (0.0-1.0)
         cool_stop: Target cool LED brightness (0.0-1.0)
         duration: Transition duration in seconds
-        
+
     Yields:
         Tuple containing:
         - warm_brightness: Current warm LED brightness (0.0-1.0)
         - cool_brightness: Current cool LED brightness (0.0-1.0)
         - step_delay: Time to wait before next step (seconds)
-        
+
     Raises:
         ValueError: If brightness values outside 0.0-1.0 or duration <= 0
     """
@@ -187,17 +184,20 @@ def generate_brightness_steps(
     #    - This ensures enough steps for smooth transitions (e.g., 0.5 change = 50 steps)
     # 2. Minimum of 1 step to handle no-change scenarios
     # 3. Maximum of MAX_STEPS (default 200) to prevent excessive CPU usage on large changes
-    steps = min(max(round(max(warm_diff, cool_diff) * config.STEPS_MULTIPLIER), 1), config.MAX_STEPS)
-    
+    steps = min(
+        max(round(max(warm_diff, cool_diff) * config.STEPS_MULTIPLIER), 1),
+        config.MAX_STEPS,
+    )
+
     step_delay = duration / steps
-    
+
     for i in range(steps + 1):  # +1 to include final value
         progress = i / steps
-        
+
         # Linear interpolation for both LEDs
         warm_brightness = warm_start + (warm_stop - warm_start) * progress
         cool_brightness = cool_start + (cool_stop - cool_start) * progress
-        
+
         yield warm_brightness, cool_brightness, step_delay
 
 
@@ -205,16 +205,16 @@ def get_transition_duration(entry: ScheduleEntry) -> int:
     """
     Calculates the duration until the schedule entry's time in seconds.
     Returns a minimum of 1 minute to prevent instant transitions.
-    
+
     Args:
         entry (ScheduleEntry): The schedule entry containing the target unix_time
-    
+
     Returns:
         int: Number of seconds until the target time, minimum 60 seconds
     """
     now = time.time()
     duration = max(60, entry["unix_time"] - now)  # minimum 1 minute transition
-    
+
     return int(duration)
 
 
@@ -222,134 +222,156 @@ def run_lighting_transition(entry: ScheduleEntry):
     """
     Runs a lighting transition based on a schedule entry.
     Duration is calculated from the entry's unix_time.
-    
+
     Args:
         entry (ScheduleEntry): The schedule entry containing target brightnesses
     """
     duration = get_transition_duration(entry)
-    
+
     # Get current brightness levels
     current_warm = warm_leds.duty_u16() / config.MAX_DUTY_CYCLE
     current_cool = cool_leds.duty_u16() / config.MAX_DUTY_CYCLE
-    
+
     # Convert target percentages to 0-1 range
     target_warm = entry["warmBrightness"] / 100
     target_cool = entry["coolBrightness"] / 100
-    
+
     log_to_aws(
         message=f"Starting {duration}s transition to {entry['time']} - Warm: {target_warm:.2f}, Cool: {target_cool:.2f}",
-        level="DEBUG"
+        level="DEBUG",
     )
-    
+
     for warm_brightness, cool_brightness, delay in generate_brightness_steps(
         warm_start=current_warm,
         warm_stop=target_warm,
         cool_start=current_cool,
         cool_stop=target_cool,
-        duration=duration
+        duration=duration,
     ):
         warm_leds.duty_u16(get_duty_for_brightness(warm_brightness))
         cool_leds.duty_u16(get_duty_for_brightness(cool_brightness))
         time.sleep(delay)
-    
-    log_to_aws(
-        message=f"Completed transition to {entry['time']}",
-        level="DEBUG"
-    )
+
+    log_to_aws(message=f"Completed transition to {entry['time']}", level="DEBUG")
+
 
 def run_schedule_list():
     """
     Executes schedule entries in chronological order.
-    
+
     Filters out past events, sorts remaining by time,
-    and runs lighting transitions for each future event.
+    Sets current brightness to most recent past event before running future events.
     Only used in 'scheduled' mode.
-    
+
     Note: Requires valid schedule_data global
     """
     if not schedule_data:
         return
-        
+
     now = time.time()
-    
-    # Sort entries by unix_time and filter out past events
-    future_entries = sorted(
-        [entry for entry in schedule_data["schedule"] if entry["unix_time"] > now],
-        key=lambda x: x["unix_time"]
+
+    # Sort all entries by unix_time
+    sorted_entries: list[ScheduleEntry] = sorted(
+        schedule_data["schedule"], key=lambda x: x["unix_time"]
     )
-    
+
+    # Find most recent past event
+    past_entries = [entry for entry in sorted_entries if entry["unix_time"] <= now]
+
+    if past_entries:
+        # Set current brightness to most recent past event
+        warm_leds.duty_u16(
+            get_duty_for_brightness(past_entries[-1]["warmBrightness"] / 100)
+        )
+        cool_leds.duty_u16(
+            get_duty_for_brightness(past_entries[-1]["coolBrightness"] / 100)
+        )
+
+    # Process future events
+    future_entries: list[ScheduleEntry] = [
+        entry for entry in sorted_entries if entry["unix_time"] > now
+    ]
+
     for entry in future_entries:
+        # Run transition for each future event
         run_lighting_transition(entry)
 
 
 def run_named_schedule_entries():
     """
     Executes named schedule entries in chronological order.
-    
-    Processes standard daily events (sunrise, sunset, etc.)
-    filtering out past events and sorting by time.
+    Sets current brightness to most recent past event before running future events.
     Only used in 'dayNight' mode.
-    
+
     Note: Requires valid schedule_data global
     """
     if not schedule_data:
         return
-        
+
     now = time.time()
-    
+
     # Create list of named entries with their keys
-    named_entries = [
-        (key, schedule_data[key]) 
+    named_entries: list[tuple[str, ScheduleEntry]] = [
+        (key, schedule_data[key])
         for key in [
-            "sunrise", "sunset",
-            "civil_twilight_begin", "civil_twilight_end",
-            "bed_time", "night_time"
+            "sunrise",
+            "sunset",
+            "civil_twilight_begin",
+            "civil_twilight_end",
+            "bed_time",
+            "night_time",
         ]
     ]
-    
-    # Sort by unix_time and filter out past events
-    future_entries = sorted(
-        [(key, entry) for key, entry in named_entries if entry["unix_time"] > now],
-        key=lambda x: x[1]["unix_time"]
-    )
-    
+
+    # Sort all entries by unix_time
+    sorted_entries = sorted(named_entries, key=lambda x: x[1]["unix_time"])
+
+    # Find most recent past event
+    past_entries = [(k, e) for k, e in sorted_entries if e["unix_time"] <= now]
+
+    if past_entries:
+        # Set current brightness to most recent past event
+        _, last_entry = past_entries[-1]
+        warm_leds.duty_u16(get_duty_for_brightness(last_entry["warmBrightness"] / 100))
+        cool_leds.duty_u16(get_duty_for_brightness(last_entry["coolBrightness"] / 100))
+
+    # Process future events
+    future_entries = [(k, e) for k, e in sorted_entries if e["unix_time"] > now]
+
     for key, entry in future_entries:
-        log_to_aws(
-            message=f"Processing named schedule entry: {key}",
-            level="INFO"
-        )
+        log_to_aws(message=f"Processing named schedule entry: {key}", level="INFO")
         run_lighting_transition(entry)
 
 
 def has_future_events() -> bool:
     """
     Checks if current schedule has any future events.
-    
+
     For 'scheduled' mode: checks schedule list
     For 'dayNight' mode: checks named schedule entries
     Compares event unix_time against current time
-    
+
     Returns:
         bool: True if any future events exist in current mode,
               False if no future events or no schedule
     """
     if not schedule_data:
         return False
-        
+
     now = time.time()
-    
+
     if schedule_data and schedule_data["mode"] == "scheduled":
-        return any(
-            entry["unix_time"] > now 
-            for entry in schedule_data["schedule"]
-        )
+        return any(entry["unix_time"] > now for entry in schedule_data["schedule"])
     elif schedule_data["mode"] == "dayNight":
         return any(
             schedule_data[key]["unix_time"] > now
             for key in [
-                "sunrise", "sunset",
-                "civil_twilight_begin", "civil_twilight_end",
-                "bed_time", "night_time"
+                "sunrise",
+                "sunset",
+                "civil_twilight_begin",
+                "civil_twilight_end",
+                "bed_time",
+                "night_time",
             ]
         )
     else:
@@ -370,117 +392,108 @@ def night_light():
 def run_demo_cycle():
     """
     Runs a compressed day/night demonstration cycle.
-    
+
     Simulates a full day in 10 seconds:
     1. Night → Dawn (2s): Warm up from night light
     2. Dawn → Morning (2s): Introduce cool light
     3. Daylight hold (2s): Full brightness
     4. Evening (2s): Reduce cool light
     5. Dusk → Night (2s): Dim to night light
-    
+
     Used for testing and demonstration purposes
     """
-    log_to_aws(
-        message="Starting demo light cycle",
-        level="INFO"
-    )
-    
+    log_to_aws(message="Starting demo light cycle", level="INFO")
+
     # Night to Dawn (dark warm to bright warm)
     for warm_brightness, cool_brightness, delay in generate_brightness_steps(
         warm_start=0.25,  # night light level
-        warm_stop=1.0,    # full warm
+        warm_stop=1.0,  # full warm
         cool_start=0.0,
         cool_stop=0.0,
-        duration=2        # 2 seconds
+        duration=2,  # 2 seconds
     ):
         warm_leds.duty_u16(get_duty_for_brightness(warm_brightness))
         cool_leds.duty_u16(get_duty_for_brightness(cool_brightness))
         time.sleep(delay)
-        
+
     # Dawn to Morning (introduce cool light)
     for warm_brightness, cool_brightness, delay in generate_brightness_steps(
-        warm_start=1.0,
-        warm_stop=0.75,
-        cool_start=0.0,
-        cool_stop=1.0,
-        duration=2
+        warm_start=1.0, warm_stop=0.75, cool_start=0.0, cool_stop=1.0, duration=2
     ):
         warm_leds.duty_u16(get_duty_for_brightness(warm_brightness))
         cool_leds.duty_u16(get_duty_for_brightness(cool_brightness))
         time.sleep(delay)
-        
+
     # Hold daylight for 2 seconds
     time.sleep(2)
-        
+
     # Evening (reduce cool light)
     for warm_brightness, cool_brightness, delay in generate_brightness_steps(
-        warm_start=0.75,
-        warm_stop=1.0,
-        cool_start=1.0,
-        cool_stop=0.0,
-        duration=2
+        warm_start=0.75, warm_stop=1.0, cool_start=1.0, cool_stop=0.0, duration=2
     ):
         warm_leds.duty_u16(get_duty_for_brightness(warm_brightness))
         cool_leds.duty_u16(get_duty_for_brightness(cool_brightness))
         time.sleep(delay)
-        
+
     # Dusk to Night (dim warm light to night level)
     for warm_brightness, cool_brightness, delay in generate_brightness_steps(
-        warm_start=1.0,
-        warm_stop=0.25,
-        cool_start=0.0,
-        cool_stop=0.0,
-        duration=2
+        warm_start=1.0, warm_stop=0.25, cool_start=0.0, cool_stop=0.0, duration=2
     ):
         warm_leds.duty_u16(get_duty_for_brightness(warm_brightness))
         cool_leds.duty_u16(get_duty_for_brightness(cool_brightness))
         time.sleep(delay)
-    
-    log_to_aws(
-        message="Completed demo light cycle",
-        level="INFO"
-    )
+
+    log_to_aws(message="Completed demo light cycle", level="INFO")
+
 
 def run_scheduled_tasks():
     """
     Main scheduling function that manages lighting updates.
-    
+
     Checks schedule validity and mode:
     - Fetches new schedule if needed
     - Runs appropriate mode handler (scheduled/dayNight/demo)
     - Handles schedule transitions and updates
     - Falls back to night light mode on errors
-    
+
     Called periodically by timer to maintain lighting schedule
     """
+    # Attempt to update the RTC to correct any drift
+    try:
+        ntptime.settime()
+    except Exception as e:
+        log_to_aws(message=f"Failed to update time: {e}", level="ERROR")
+
+    if schedule_data and schedule_data["mode"] == "demo":
+        # Demo mode runs its own cycle forever
+        while True:
+            run_demo_cycle()
+
     # Check if we need to fetch a new schedule
-    if not schedule_data or not has_future_events():
-         # If no future events, wait until the next update time
+    if schedule_data is None or not has_future_events():
+        # If no future events, wait until the next update time
         if schedule_data and time.time() < schedule_data["update_time_unix"]:
             time.sleep(schedule_data["update_time_unix"] - time.time())
-        
+
         # get new schedule
         fetch_schedule()
-    
+
     elif schedule_data["mode"] == "scheduled":
-         # Run the appropriate lighting mode based on schedule data
+        # Run the appropriate lighting mode based on schedule data
         run_schedule_list()
-    
+
     elif schedule_data["mode"] == "dayNight":
         run_named_schedule_entries()
-    
-    elif schedule_data["mode"] == "demo":
-        run_demo_cycle()
+
     else:
         log_to_aws(
-            message=f"Unknown schedule mode: {schedule_data['mode']}",
-            level="ERROR"
+            message=f"Unknown schedule mode: {schedule_data['mode']}", level="ERROR"
         )
 
 
 try:
     # start at dim setting
-    night_light()  
+    night_light()
 
     # Network setup
     connect_wifi()
@@ -488,8 +501,8 @@ try:
     # sets the RTC with the unix epoch from the internet
     ntptime.settime()
 
-     # Initial lighting schedule fetch
-    fetch_schedule() 
+    # Initial lighting schedule fetch
+    fetch_schedule()
 
     # Schedule the timer to check every 60,0000 milliseconds (10 minutes)
     #   and run appropriate day/night routine
@@ -513,7 +526,4 @@ except KeyboardInterrupt:
     machine.reset()
 except Exception as e:
     # we can hope this gets logged correctly
-    log_to_aws(
-        message=f"Unknown error in main: {e}",
-        level="ERROR"
-    )
+    log_to_aws(message=f"Unknown error in main: {e}", level="ERROR")

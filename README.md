@@ -10,46 +10,46 @@ The system fetches dynamic lighting schedules from a cloud API, allowing for sea
 
 ### Features
 
-- **Dynamic Light Control**
+-   **Dynamic Light Control**
 
-  - Smooth transitions between lighting states
-  - Gamma-corrected PWM brightness control
-  - Dual-channel warm/cool LED management
-  - IEEE 1789-2015 compliant PWM frequency
+    -   Smooth transitions between lighting states
+    -   Gamma-corrected PWM brightness control
+    -   Dual-channel warm/cool LED management
+    -   IEEE 1789-2015 compliant PWM frequency
 
-- **Multiple Operating Modes**
+-   **Multiple Operating Modes**
 
-  - `dayNight`: Follows natural daylight patterns
-  - `scheduled`: User-defined custom schedules
-  - `demo`: Quick demonstration cycle
-  - Fallback night light mode for safety
+    -   `dayNight`: Follows natural daylight patterns
+    -   `scheduled`: User-defined custom schedules
+    -   `demo`: Quick demonstration cycle
+    -   Fallback night light mode for safety
 
-- **Smart Scheduling**
+-   **Smart Scheduling**
 
-  - Cloud-based schedule management
-  - Automatic schedule updates
-  - Handles timezone and DST changes
-  - Supports multiple daily events:
-    - Civil twilight transitions
-    - Sunrise/sunset simulation
-    - Custom bed time dimming
-    - Night light mode
+    -   Cloud-based schedule management
+    -   Automatic schedule updates
+    -   Handles timezone and DST changes
+    -   Supports multiple daily events:
+        -   Civil twilight transitions
+        -   Sunrise/sunset simulation
+        -   Custom bed time dimming
+        -   Night light mode
 
-- **Cloud Integration**
-  - RESTful API for schedule updates
-  - AWS Lambda-based event logging
-  - Error reporting and monitoring
-  - Status tracking and debugging
+-   **Cloud Integration**
+    -   RESTful API for schedule updates
+    -   AWS Lambda-based event logging
+    -   Error reporting and monitoring
+    -   Status tracking and debugging
 
 ## Setup
 
 ### Hardware Requirements
 
-- Raspberry Pi Pico W
-- Warm white LED strip/array
-- Cool white LED strip/array
-- PWM-capable MOSFETs for LED control
-- 12/24V power supply (sized for LED load)
+-   Raspberry Pi Pico W
+-   Warm white LED strip/array
+-   Cool white LED strip/array
+-   PWM-capable MOSFETs for LED control
+-   12/24V power supply (sized for LED load)
 
 ### Configuration
 
@@ -73,20 +73,26 @@ COOL_LED_PIN = 20  # PWM capable GPIO
 
 Optional settings to tune behavior:
 
-- `PWM_FREQUENCY`: LED refresh rate (default 8000Hz)
-- `STEPS_MULTIPLIER`: Transition smoothness
-- `MAX_STEPS`: CPU usage limit
-- `NIGHT_LIGHT_BRIGHTNESS`: Default safety light level
+-   `PWM_FREQUENCY`: LED refresh rate (default 8000Hz)
+-   `STEPS_MULTIPLIER`: Transition smoothness
+-   `MAX_STEPS`: CPU usage limit
+-   `NIGHT_LIGHT_BRIGHTNESS`: Default safety light level
 
 ### Pi Pico Installation
 
 Use Thonny to upload the main.py and config.py files to the microcontroller. Setup guide [here](https://projects.raspberrypi.org/en/projects/getting-started-with-the-pico/2). There are no good VSCode extensions at this time that can reliably connect and manage files.
 
+To get the typings module to work:
+
+1. Install [mpremote](https://docs.micropython.org/en/latest/reference/mpremote.html) on the dev machine.
+2. On the dev machine, run the commands to install the code from [this repo](https://github.com/Josverl/micropython-stubs/tree/main/mip)
+   `mpremote mip install github:josverl/micropython-stubs/mip/typing.mpy`
+
 ### VSCode
 
 The VSCode configuration is not strictly necessary but helps a bit with development experience.
 
-For VSCode typings and error checking to work correctly with MicroPython, setup a venv and the typee stubs using the Pylance options described [here](https://micropython-stubs.readthedocs.io/en/main/index.html).
+For VSCode typings and error checking to work correctly with MicroPython, setup a venv and the type stubs using the Pylance options described [here](https://micropython-stubs.readthedocs.io/en/main/index.html).
 
 The requirements-dev.txt is a recommended house keeping file from that process. The .vscode folder contains the VSCode workspace setting overrides.
 
