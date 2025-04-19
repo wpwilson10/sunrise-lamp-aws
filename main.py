@@ -21,28 +21,32 @@ wifi_connection = None
 schedule_data: ScheduleData | None = None
 
 
-def connect_wifi():
+def connect_wifi(timeout: int = 30) -> bool:
     """
-    Establishes WiFi connection using credentials from config.
-    Retries connection until successful.
-    Logs connection status and IP address on success.
+    Attempt a Wi‑Fi connection for *timeout* seconds.
+    Returns True on success, False on failure (caller may fall back
+    to night‑light mode and retry later).
     """
     global wifi_connection
+
     if wifi_connection and wifi_connection.isconnected():
-        return  # Already connected
+        return True
 
     wifi_connection = network.WLAN(network.STA_IF)
     wifi_connection.active(True)
 
-    while not wifi_connection.isconnected():
-        print("Attempting to connect to network.")
+    start = time.time()
+    while not wifi_connection.isconnected() and (time.time() - start) < timeout:
+        print("Attempting to connect to network…")
         wifi_connection.connect(config.WIFI_SSID, config.WIFI_PASSWORD)
         time.sleep(5)
 
-    log_to_aws(
-        message=f"Connected to network. SSID: {config.WIFI_SSID}. IP Address: {wifi_connection.ifconfig()[0]}",
-        level="INFO",
-    )
+    if wifi_connection.isconnected():
+        log_to_aws(f"Connected.  IP: {wifi_connection.ifconfig()[0]}", "INFO")
+        return True
+
+    log_to_aws("Wi‑Fi connect timed out; will retry later.", "ERROR")
+    return False
 
 
 def log_to_aws(message: str, level: str = "INFO") -> None:
@@ -132,22 +136,46 @@ def fetch_schedule():
         return False
 
 
-def get_duty_for_brightness(v_out: float) -> int:
-    """
-    Converts a perceived brightness value to PWM duty cycle.
+###############################################################################
+# Brightness / PWM helpers
+###############################################################################
+# Uses gamma correction (power of 2.2) to adjust for human perception of LED brightness.
+# Based on https://codeinsecurity.wordpress.com/2023/07/17/the-problem-with-driving-leds-with-pwm/
+GAMMA: float = 2.2
 
-    Uses gamma correction (power of 2.2) to adjust for human perception
-    of LED brightness. Maps 0.0-1.0 range to 0-MAX_DUTY_CYCLE.
-    Based on https://codeinsecurity.wordpress.com/2023/07/17/the-problem-with-driving-leds-with-pwm/
+
+def brightness_to_duty(brightness: float) -> int:
+    """
+    Convert a perceptual brightness value (0.0 – 1.0) into a 16‑bit PWM duty.
 
     Args:
-        v_out (float): Desired brightness between 0.0 and 1.0
+        brightness (float): Desired brightness where 0 = off and 1 = max.
 
     Returns:
-        int: PWM duty cycle value between 0 and MAX_DUTY_CYCLE
+        int: 16‑bit duty value suitable for `PWM.duty_u16()`.
     """
+    return round(config.MAX_DUTY_CYCLE * brightness**GAMMA)
 
-    return round(config.MAX_DUTY_CYCLE * v_out**2.2)
+
+def duty_to_brightness(duty: int) -> float:
+    """
+    Convert a 16‑bit PWM duty value back to perceptual brightness.
+
+    Args:
+        duty (int): Raw value returned by `PWM.duty_u16()`.
+
+    Returns:
+        float: Brightness in the 0.0 – 1.0 range.
+    """
+    return (duty / config.MAX_DUTY_CYCLE) ** (1 / GAMMA)
+
+
+def set_leds(warm: float, cool: float) -> None:
+    """
+    Write both PWM channels in one call.  *warm* and *cool* are 0‑1 floats.
+    """
+    warm_leds.duty_u16(brightness_to_duty(warm))
+    cool_leds.duty_u16(brightness_to_duty(cool))
 
 
 def generate_brightness_steps(
@@ -157,87 +185,73 @@ def generate_brightness_steps(
     cool_stop: float,
     duration: int,
 ):
-    """Generate brightness values for LED transition.
+    """
+    Generate brightness transitions at a fixed per‑second rate.
 
     Args:
-        warm_start: Starting warm LED brightness (0.0-1.0)
-        warm_stop: Target warm LED brightness (0.0-1.0)
-        cool_start: Starting cool LED brightness (0.0-1.0)
-        cool_stop: Target cool LED brightness (0.0-1.0)
-        duration: Transition duration in seconds
+        warm_start: Starting warm brightness (0.0–1.0)
+        warm_stop: Target warm brightness (0.0–1.0)
+        cool_start: Starting cool brightness (0.0–1.0)
+        cool_stop: Target cool brightness (0.0–1.0)
+        duration: Total transition time, in seconds
 
     Yields:
-        Tuple containing:
-        - warm_brightness: Current warm LED brightness (0.0-1.0)
-        - cool_brightness: Current cool LED brightness (0.0-1.0)
-        - step_delay: Time to wait before next step (seconds)
-
-    Raises:
-        ValueError: If brightness values outside 0.0-1.0 or duration <= 0
+        (warm_brightness, cool_brightness, step_delay)
     """
-    # Calculate number of steps based on the largest change
-    warm_diff = abs(warm_stop - warm_start)
-    cool_diff = abs(cool_stop - cool_start)
-
-    # Calculate steps with constraints:
-    # 1. Base steps on largest brightness change multiplied by STEPS_MULTIPLIER (default 100)
-    #    - This ensures enough steps for smooth transitions (e.g., 0.5 change = 50 steps)
-    # 2. Minimum of 1 step to handle no-change scenarios
-    # 3. Maximum of MAX_STEPS (default 200) to prevent excessive CPU usage on large changes
-    steps = min(
-        max(round(max(warm_diff, cool_diff) * config.STEPS_MULTIPLIER), 1),
-        config.MAX_STEPS,
-    )
-
+    MAX_STEPS = 2_000  # safety ceiling
+    # Number of update steps = duration × updates/sec (at least 1)
+    steps_per_second = config.STEPS_PER_SECOND  # e.g. 10
+    steps = min(MAX_STEPS, max(1, int(duration * steps_per_second)))
     step_delay = duration / steps
 
-    for i in range(steps + 1):  # +1 to include final value
+    for i in range(steps + 1):
         progress = i / steps
-
-        # Linear interpolation for both LEDs
         warm_brightness = warm_start + (warm_stop - warm_start) * progress
         cool_brightness = cool_start + (cool_stop - cool_start) * progress
-
         yield warm_brightness, cool_brightness, step_delay
 
 
 def get_transition_duration(entry: ScheduleEntry) -> int:
     """
-    Calculates the duration until the schedule entry's time in seconds.
-    Returns a minimum of 1 minute to prevent instant transitions.
+    Seconds until the **future** event.  If the entry is already overdue,
+    return 60 s so we still fade rather than jump.  Otherwise, use the
+    true interval even when it's <60 s (startup at T‑5 s, for example).
+    """
+    delta = entry["unix_time"] - time.time()
+    return 60 if delta <= 0 else max(1, int(delta))
+
+
+def run_lighting_transition(
+    entry: ScheduleEntry,
+    *,
+    forced_duration: int | None = None,
+) -> None:
+    """
+    Transition the LEDs from their *current* level to the target contained
+    in ``entry``.  Duration is normally computed from the entry's unix_time
+    but can be overridden (``forced_duration``) when we just want a quick
+    sync after boot.
 
     Args:
-        entry (ScheduleEntry): The schedule entry containing the target unix_time
-
-    Returns:
-        int: Number of seconds until the target time, minimum 60 seconds
+        entry (ScheduleEntry):  Target warm / cool brightness levels.
+        forced_duration (int | None):  Optional fixed duration in seconds.
     """
-    now = time.time()
-    duration = max(60, entry["unix_time"] - now)  # minimum 1 minute transition
+    # Either use the forced value or compute time‑to‑target
+    duration = forced_duration or get_transition_duration(entry)
 
-    return int(duration)
+    # Read the true perceptual start level using the inverse gamma curve
+    current_warm = duty_to_brightness(warm_leds.duty_u16())
+    current_cool = duty_to_brightness(warm_leds.duty_u16())
 
-
-def run_lighting_transition(entry: ScheduleEntry):
-    """
-    Runs a lighting transition based on a schedule entry.
-    Duration is calculated from the entry's unix_time.
-
-    Args:
-        entry (ScheduleEntry): The schedule entry containing target brightnesses
-    """
-    duration = get_transition_duration(entry)
-
-    # Get current brightness levels
-    current_warm = warm_leds.duty_u16() / config.MAX_DUTY_CYCLE
-    current_cool = cool_leds.duty_u16() / config.MAX_DUTY_CYCLE
-
-    # Convert target percentages to 0-1 range
+    # Convert schedule percentages into 0‑1 floats
     target_warm = entry["warmBrightness"] / 100
     target_cool = entry["coolBrightness"] / 100
 
     log_to_aws(
-        message=f"Starting {duration}s transition to {entry['time']} - Warm: {target_warm:.2f}, Cool: {target_cool:.2f}",
+        message=(
+            f"Starting {duration}s transition to {entry['time']} — "
+            f"Warm: {target_warm:.2f}, Cool: {target_cool:.2f}"
+        ),
         level="DEBUG",
     )
 
@@ -248,8 +262,7 @@ def run_lighting_transition(entry: ScheduleEntry):
         cool_stop=target_cool,
         duration=duration,
     ):
-        warm_leds.duty_u16(get_duty_for_brightness(warm_brightness))
-        cool_leds.duty_u16(get_duty_for_brightness(cool_brightness))
+        set_leds(warm_brightness, cool_brightness)
         time.sleep(delay)
 
     log_to_aws(message=f"Completed transition to {entry['time']}", level="DEBUG")
@@ -280,11 +293,9 @@ def run_schedule_list():
 
     if past_entries:
         # Set current brightness to most recent past event
-        warm_leds.duty_u16(
-            get_duty_for_brightness(past_entries[-1]["warmBrightness"] / 100)
-        )
-        cool_leds.duty_u16(
-            get_duty_for_brightness(past_entries[-1]["coolBrightness"] / 100)
+        set_leds(
+            past_entries[-1]["warmBrightness"] / 100,
+            past_entries[-1]["coolBrightness"] / 100,
         )
 
     # Process future events
@@ -313,34 +324,24 @@ def run_named_schedule_entries():
     # Create list of named entries with their keys
     named_entries: list[tuple[str, ScheduleEntry]] = [
         (key, schedule_data[key])
-        for key in [
-            "sunrise",
-            "sunset",
-            "civil_twilight_begin",
-            "civil_twilight_end",
-            "bed_time",
-            "night_time",
-        ]
+        for key in config.NAMED_SCHEDULE_KEYS
+        if key in schedule_data
     ]
 
-    # Sort all entries by unix_time
-    sorted_entries = sorted(named_entries, key=lambda x: x[1]["unix_time"])
+    # Sort chronologically
+    named_entries.sort(key=lambda kv: kv[1]["unix_time"])
 
-    # Find most recent past event
-    past_entries = [(k, e) for k, e in sorted_entries if e["unix_time"] <= now]
+    # Sync LEDs to the last past event with a fast, eye‑safe fade
+    past = [(k, e) for k, e in named_entries if e["unix_time"] <= now]
+    if past:
+        _, last_entry = past[-1]
+        run_lighting_transition(last_entry, forced_duration=2)
 
-    if past_entries:
-        # Set current brightness to most recent past event
-        _, last_entry = past_entries[-1]
-        warm_leds.duty_u16(get_duty_for_brightness(last_entry["warmBrightness"] / 100))
-        cool_leds.duty_u16(get_duty_for_brightness(last_entry["coolBrightness"] / 100))
-
-    # Process future events
-    future_entries = [(k, e) for k, e in sorted_entries if e["unix_time"] > now]
-
-    for key, entry in future_entries:
-        log_to_aws(message=f"Processing named schedule entry: {key}", level="INFO")
-        run_lighting_transition(entry)
+    # Transition through every future event
+    for key, entry in named_entries:
+        if entry["unix_time"] > now:
+            log_to_aws(message=f"Processing named schedule entry: {key}", level="INFO")
+            run_lighting_transition(entry)
 
 
 def has_future_events() -> bool:
@@ -364,15 +365,7 @@ def has_future_events() -> bool:
         return any(entry["unix_time"] > now for entry in schedule_data["schedule"])
     elif schedule_data["mode"] == "dayNight":
         return any(
-            schedule_data[key]["unix_time"] > now
-            for key in [
-                "sunrise",
-                "sunset",
-                "civil_twilight_begin",
-                "civil_twilight_end",
-                "bed_time",
-                "night_time",
-            ]
+            schedule_data[key]["unix_time"] > now for key in config.NAMED_SCHEDULE_KEYS
         )
     else:
         return False
@@ -385,8 +378,7 @@ def night_light():
         level="DEBUG",
     )
 
-    warm_leds.duty_u16(get_duty_for_brightness(config.NIGHT_LIGHT_BRIGHTNESS))
-    cool_leds.duty_u16(0)
+    set_leds(config.NIGHT_LIGHT_BRIGHTNESS, 0)
 
 
 def run_demo_cycle():
@@ -412,16 +404,14 @@ def run_demo_cycle():
         cool_stop=0.0,
         duration=2,  # 2 seconds
     ):
-        warm_leds.duty_u16(get_duty_for_brightness(warm_brightness))
-        cool_leds.duty_u16(get_duty_for_brightness(cool_brightness))
+        set_leds(warm_brightness, cool_brightness)
         time.sleep(delay)
 
     # Dawn to Morning (introduce cool light)
     for warm_brightness, cool_brightness, delay in generate_brightness_steps(
         warm_start=1.0, warm_stop=0.75, cool_start=0.0, cool_stop=1.0, duration=2
     ):
-        warm_leds.duty_u16(get_duty_for_brightness(warm_brightness))
-        cool_leds.duty_u16(get_duty_for_brightness(cool_brightness))
+        set_leds(warm_brightness, cool_brightness)
         time.sleep(delay)
 
     # Hold daylight for 2 seconds
@@ -431,16 +421,14 @@ def run_demo_cycle():
     for warm_brightness, cool_brightness, delay in generate_brightness_steps(
         warm_start=0.75, warm_stop=1.0, cool_start=1.0, cool_stop=0.0, duration=2
     ):
-        warm_leds.duty_u16(get_duty_for_brightness(warm_brightness))
-        cool_leds.duty_u16(get_duty_for_brightness(cool_brightness))
+        set_leds(warm_brightness, cool_brightness)
         time.sleep(delay)
 
     # Dusk to Night (dim warm light to night level)
     for warm_brightness, cool_brightness, delay in generate_brightness_steps(
         warm_start=1.0, warm_stop=0.25, cool_start=0.0, cool_stop=0.0, duration=2
     ):
-        warm_leds.duty_u16(get_duty_for_brightness(warm_brightness))
-        cool_leds.duty_u16(get_duty_for_brightness(cool_brightness))
+        set_leds(warm_brightness, cool_brightness)
         time.sleep(delay)
 
     log_to_aws(message="Completed demo light cycle", level="INFO")
@@ -492,29 +480,18 @@ def run_scheduled_tasks():
 
 
 try:
-    # start at dim setting
-    night_light()
+    night_light()  # safe startup level
+    connect_wifi()  # non‑blocking try
+    ntptime.settime()  # sync RTC (best‑effort)
+    fetch_schedule()  # first schedule pull
 
-    # Network setup
-    connect_wifi()
+    NEXT_RUN = time.time()  # scheduler heartbeat
 
-    # sets the RTC with the unix epoch from the internet
-    ntptime.settime()
-
-    # Initial lighting schedule fetch
-    fetch_schedule()
-
-    # Schedule the timer to check every 60,0000 milliseconds (10 minutes)
-    #   and run appropriate day/night routine
-    timer = machine.Timer()
-    timer.init(
-        period=600000,
-        mode=machine.Timer.PERIODIC,
-        callback=lambda t: run_scheduled_tasks(),
-    )
-
-    # start lighting cycle
-    run_scheduled_tasks()
+    while True:
+        if time.time() >= NEXT_RUN:
+            run_scheduled_tasks()
+            NEXT_RUN += 600  # every 10 min
+        time.sleep(1)  # idle‑sleep to save CPU
 
 except KeyboardInterrupt:
     # we can hope this gets logged correctly

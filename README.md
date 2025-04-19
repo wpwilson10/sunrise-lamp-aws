@@ -74,9 +74,9 @@ COOL_LED_PIN = 20  # PWM capable GPIO
 Optional settings to tune behavior:
 
 -   `PWM_FREQUENCY`: LED refresh rate (default 8000Hz)
--   `STEPS_MULTIPLIER`: Transition smoothness
--   `MAX_STEPS`: CPU usage limit
--   `NIGHT_LIGHT_BRIGHTNESS`: Default safety light level
+-   `STEPS_PER_SECOND`: Transition smoothness (default 10 per second)
+-   `MAX_STEPS`: Limits brightness transitions steps (default 2000 per transition)
+-   `NIGHT_LIGHT_BRIGHTNESS`: Default safety light level (default 25%)
 
 ### Pi Pico Installation
 
