@@ -241,7 +241,7 @@ def run_lighting_transition(
 
     # Read the true perceptual start level using the inverse gamma curve
     current_warm = duty_to_brightness(warm_leds.duty_u16())
-    current_cool = duty_to_brightness(warm_leds.duty_u16())
+    current_cool = duty_to_brightness(cool_leds.duty_u16())
 
     # Convert schedule percentages into 0‑1 floats
     target_warm = entry["warmBrightness"] / 100
@@ -249,7 +249,7 @@ def run_lighting_transition(
 
     log_to_aws(
         message=(
-            f"Starting {duration}s transition to {entry['time']} — "
+            f"Starting {duration}s transition to {entry['time']} - "
             f"Warm: {target_warm:.2f}, Cool: {target_cool:.2f}"
         ),
         level="DEBUG",
