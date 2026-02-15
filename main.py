@@ -194,18 +194,60 @@ class LampController:
             except Exception:
                 pass  # Last resort - can't do anything if LED control fails
 
+    def _run_demo_updates(self) -> None:
+        """Run fast update loop for smooth demo transitions.
+
+        Demo transitions span only 2 seconds each within a 15-second cycle,
+        requiring much faster updates than the normal 5-second timer.
+        Uses 50ms updates for ~40 brightness steps per transition.
+
+        Blocks until KeyboardInterrupt, which propagates for clean shutdown.
+        """
+        update_interval_s = 0.05  # 50ms for smooth transitions
+        while True:
+            try:
+                if self._schedule.needs_refresh():
+                    self._log("Schedule refresh needed", "DEBUG")
+                    if self._network.ensure_connected():
+                        if self._schedule.fetch_schedule():
+                            self._log(f"Schedule refreshed: mode={self._schedule.get_mode()}", "INFO")
+                        else:
+                            self._log("Schedule refresh failed - using cached schedule", "ERROR")
+                    else:
+                        self._log("WiFi reconnection failed - using cached schedule", "ERROR")
+
+                self._transition.update()
+
+            except Exception as e:
+                self._log(f"Demo update error: {e} - falling back to night light", "ERROR")
+                try:
+                    self._leds.night_light(config.NIGHT_LIGHT_BRIGHTNESS)
+                except Exception:
+                    pass
+
+            time.sleep(update_interval_s)
+
     def start(self) -> None:
         """Start the lamp controller.
 
-        Executes the startup sequence and sets up the periodic timer.
-        This method blocks indefinitely (timer runs in background on Pico).
+        Executes the startup sequence and sets up brightness updates.
+        For demo mode, uses a fast 50ms polling loop (blocks).
+        For normal modes, sets up a periodic 5-second timer.
         """
         self._log("Lamp Controller starting", "INFO")
 
         # Run startup sequence
         self._startup_sequence()
 
-        # Set up periodic timer for brightness updates
+        # Demo mode needs fast updates for smooth 2-second transitions.
+        # The normal 5-second timer only fires ~3 times per 15-second demo
+        # cycle, causing visible brightness jumps.
+        if self._schedule.is_demo_mode():
+            self._log("Demo mode detected - using 50ms update loop", "INFO")
+            self._run_demo_updates()
+            return
+
+        # Set up periodic timer for brightness updates (normal modes)
         if machine is not None:
             self._timer = machine.Timer()  # type: ignore[reportUnknownMemberType] - MicroPython module
             self._timer.init(  # type: ignore[reportUnknownMemberType] - MicroPython module

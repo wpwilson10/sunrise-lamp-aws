@@ -154,13 +154,12 @@ class TransitionEngine:
             Tuple of (warm, cool) brightness values in range 0.0-1.0
         """
         cycle_duration = self._schedule.get_demo_cycle_duration()
-
-        # Get the first entry's time as the cycle start reference
         cycle_start = entries[0]["unix_time"]
-        now = time.time()
 
-        # Calculate position within the current cycle
-        elapsed_total = now - cycle_start
+        # Use sub-second precision elapsed time for smooth interpolation.
+        # MicroPython's time.time() returns integer seconds, which causes
+        # brightness to staircase once per second instead of ramping smoothly.
+        elapsed_total = self._schedule.get_demo_elapsed_s()
         cycle_time = elapsed_total % cycle_duration
 
         # Find surrounding entries based on relative offset within cycle

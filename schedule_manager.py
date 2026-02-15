@@ -98,6 +98,7 @@ class ScheduleManager:
         # Internal state
         self._cached_schedule = None  # List of schedule entries with unix_time
         self._last_fetch_time = 0  # Unix timestamp of last successful fetch
+        self._demo_ref_ticks_ms: int = 0  # ticks_ms reference for demo elapsed time
 
         # Use config value or fallback to class default
         default_mode = config.DEFAULT_SCHEDULE_MODE if config else self.DEFAULT_MODE
@@ -286,8 +287,38 @@ class ScheduleManager:
         self._cached_schedule = entries
         self._last_fetch_time = now
 
+        # Store ticks reference for sub-second elapsed time calculation.
+        # MicroPython's time.time() returns integer seconds which is too coarse
+        # for smooth demo transitions. ticks_ms gives millisecond precision.
+        if hasattr(time, 'ticks_ms'):
+            self._demo_ref_ticks_ms = time.ticks_ms()  # type: ignore[reportAttributeAccessIssue] - MicroPython API
+        else:
+            self._demo_ref_ticks_ms = 0
+
         print(f"Demo schedule set up: {len(entries)} entries, {cycle_duration}s cycle")
         return True
+
+    def get_demo_elapsed_s(self) -> float:
+        """Get seconds elapsed since demo schedule was created.
+
+        Uses ticks_ms on MicroPython for sub-second precision, since
+        time.time() returns integer seconds on MicroPython which causes
+        visible brightness stepping in fast demo transitions.
+
+        Falls back to float time.time() on CPython where it already
+        has microsecond precision.
+
+        Returns:
+            Elapsed seconds since demo schedule setup, as a float.
+        """
+        if hasattr(time, 'ticks_ms'):
+            # type: ignore below - MicroPython-only API, guarded by hasattr
+            elapsed_ms = time.ticks_diff(time.ticks_ms(), self._demo_ref_ticks_ms)  # type: ignore[reportAttributeAccessIssue]
+            return elapsed_ms / 1000.0
+        # CPython: time.time() returns float with sub-second precision
+        if self._cached_schedule:
+            return time.time() - self._cached_schedule[0]["unix_time"]
+        return 0.0
 
     def is_demo_mode(self) -> bool:
         """Check if currently in demo mode.
