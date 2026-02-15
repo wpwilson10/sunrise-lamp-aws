@@ -34,8 +34,6 @@ Requirements Addressed:
 - 9.2: Timer-driven updates calculate current target and apply immediately
 """
 
-from __future__ import annotations
-
 import time
 
 try:

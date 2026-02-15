@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Main module for the Sunrise Lamp Controller.
 
 This module contains the LampController class that orchestrates all components
@@ -26,17 +27,12 @@ This non-blocking approach ensures smooth transitions and responsive
 schedule updates without blocking sleep calls.
 """
 
-from __future__ import annotations
-
 import time
-import json
 
 try:
     import machine
-    from machine import Timer
 except ImportError:
     machine = None
-    Timer = None
 
 import config
 from led_driver import LEDDriver
@@ -110,7 +106,7 @@ class LampController:
                 "content-type": "application/json",
                 "x-custom-auth": config.LOGGING_API_TOKEN
             }
-            payload: dict = {
+            payload: dict[str, str] = {
                 "message": message,
                 "level": level,
                 "service_name": config.LOGGING_SERVICE_NAME,
@@ -162,7 +158,7 @@ class LampController:
         self._startup_complete = True
         return True
 
-    def _on_timer(self, timer: Timer) -> None:
+    def _on_timer(self, timer: object) -> None:
         """Timer callback - update brightness and check schedule refresh.
 
         Called periodically by the timer. Handles:
@@ -195,7 +191,7 @@ class LampController:
             self._log(f"Timer callback error: {e} - falling back to night light", "ERROR")
             try:
                 self._leds.night_light(config.NIGHT_LIGHT_BRIGHTNESS)
-            except:
+            except Exception:
                 pass  # Last resort - can't do anything if LED control fails
 
     def start(self) -> None:
@@ -211,8 +207,8 @@ class LampController:
 
         # Set up periodic timer for brightness updates
         if machine is not None:
-            self._timer = machine.Timer()
-            self._timer.init(
+            self._timer = machine.Timer()  # type: ignore[reportUnknownMemberType] - MicroPython module
+            self._timer.init(  # type: ignore[reportUnknownMemberType] - MicroPython module
                 period=config.UPDATE_INTERVAL_MS,
                 mode=machine.Timer.PERIODIC,
                 callback=self._on_timer

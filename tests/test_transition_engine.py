@@ -4,8 +4,7 @@ Uses hypothesis for property-based testing with minimum 100 iterations per prope
 Tests linear interpolation, brightness at entry times, and past entry handling.
 """
 
-import pytest
-from hypothesis import given, settings, strategies as st, assume
+from hypothesis import given, settings, strategies as st
 from unittest.mock import Mock
 import time
 

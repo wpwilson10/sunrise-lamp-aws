@@ -29,7 +29,7 @@ The controller fetches dynamic lighting schedules from a cloud API, allowing for
 - **Multiple Operating Modes**
 
   - `dayNight`: Follows natural daylight patterns
-  - `scheduled`: User-defined custom schedules
+  - `scheduled`: User-defined custom schedules (works on Pico side but has no frontend UI currently)
   - `demo`: Quick 15-second demonstration cycle
   - Automatic night light fallback for safety
 
@@ -89,6 +89,7 @@ The controller fetches dynamic lighting schedules from a cloud API, allowing for
 ├── network_manager.py   # WiFi, NTP, and HTTP operations
 ├── schedule_manager.py  # Schedule fetching and caching
 ├── transition_engine.py # Brightness interpolation
+├── models.py            # Data models for schedule entries
 ├── config.py            # Configuration (copy from template)
 ├── config.template.py   # Configuration template
 └── tests/               # Property-based and unit tests
@@ -139,15 +140,30 @@ Optional settings to tune behavior:
 
 ### Pi Pico Installation
 
-Use Thonny to upload the following files to the microcontroller:
-- `main.py`
-- `led_driver.py`
-- `network_manager.py`
-- `schedule_manager.py`
-- `transition_engine.py`
-- `config.py`
+Use [mpremote](https://docs.micropython.org/en/latest/reference/mpremote.html) to upload files to the microcontroller over USB:
 
-Setup guide [here](https://projects.raspberrypi.org/en/projects/getting-started-with-the-pico/2). There are no good VSCode extensions at this time that can reliably connect and manage files.
+```bash
+# Install mpremote (in the project venv)
+uv pip install mpremote
+
+# Connect Pico W via USB, then upload all source files
+mpremote cp main.py led_driver.py network_manager.py schedule_manager.py transition_engine.py models.py config.py :
+
+# Restart the Pico to run the new code
+mpremote reset
+```
+
+Other useful commands:
+
+```bash
+mpremote ls :              # List files on the Pico
+mpremote cat :main.py      # View a file on the Pico
+mpremote rm :config.py     # Remove a file from the Pico
+mpremote connect list      # List connected devices
+mpremote repl              # Open interactive REPL (Ctrl+] to exit)
+```
+
+For first-time MicroPython setup, see the [getting started guide](https://projects.raspberrypi.org/en/projects/getting-started-with-the-pico/2). If the Pico doesn't have MicroPython firmware installed, hold the BOOTSEL button while plugging in USB, then drag the `.uf2` firmware file to the mounted drive.
 
 ### Demo Mode
 
@@ -172,22 +188,24 @@ The requirements-dev.txt is a recommended house keeping file from that process. 
 
 ## API Contract
 
-The schedule API should return JSON in this format:
+The schedule API returns a unified JSON format with pre-computed Unix timestamps:
 
 ```json
 {
   "mode": "dayNight",
-  "utc_offset": -18000,
-  "entries": [
-    { "time": "06:30", "warm": 20, "cool": 0, "label": "civil_twilight_begin" },
-    { "time": "07:00", "warm": 80, "cool": 30, "label": "sunrise" },
-    { "time": "17:30", "warm": 80, "cool": 30, "label": "sunset" },
-    { "time": "21:00", "warm": 25, "cool": 0, "label": "bedtime" }
+  "serverTime": 1706745600,
+  "brightnessSchedule": [
+    { "time": "06:30", "unixTime": 1706785800, "warmBrightness": 25, "coolBrightness": 0, "label": "civil_twilight_begin" },
+    { "time": "07:00", "unixTime": 1706787600, "warmBrightness": 75, "coolBrightness": 100, "label": "sunrise" },
+    { "time": "19:30", "unixTime": 1706832600, "warmBrightness": 75, "coolBrightness": 100, "label": "sunset" },
+    { "time": "20:00", "unixTime": 1706834400, "warmBrightness": 100, "coolBrightness": 0, "label": "civil_twilight_end" },
+    { "time": "23:00", "unixTime": 1706845200, "warmBrightness": 100, "coolBrightness": 0, "label": "bed_time" },
+    { "time": "23:30", "unixTime": 1706847000, "warmBrightness": 25, "coolBrightness": 0, "label": "night_time" }
   ]
 }
 ```
 
-See `api_contract.md` for full documentation.
+See `light-schedule-service/docs/api_contract.md` for full documentation.
 
 ## Issues
 

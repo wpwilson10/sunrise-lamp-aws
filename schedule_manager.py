@@ -1,31 +1,21 @@
 """Schedule Manager module for fetching, caching, and managing lighting schedules.
 
-This module handles schedule data from the server, computes unix timestamps from
-time strings, validates brightness values, and determines when schedules need
-to be refreshed.
+This module handles schedule data from the server, validates brightness values,
+and determines when schedules need to be refreshed.
 
 Schedule Data Flow:
 ------------------
-1. Server provides schedule with mode, UTC offset, and entries (time strings + brightness)
+1. Server provides unified format with mode, serverTime, and brightnessSchedule array
 2. ScheduleManager fetches via NetworkManager
-3. Time strings ("HH:MM") are converted to unix timestamps using current date + UTC offset
-4. Entries are sorted chronologically and cached
+3. Server provides pre-computed unixTime values (no client-side timestamp computation)
+4. Entries are validated, normalized (0-100 → 0.0-1.0), and cached
 5. TransitionEngine reads cached entries to interpolate brightness
 
-Timezone Handling:
------------------
-The Pico's RTC is set to UTC via NTP. Schedule times from the server are in local
-time (e.g., "07:00" for sunrise). We need to convert these to UTC unix timestamps:
-
-1. Server provides utc_offset (e.g., -18000 for EST = UTC-5)
-2. We compute local timestamp for "HH:MM" on today's date
-3. We subtract utc_offset to get UTC timestamp
-
-Example: "07:00" EST (UTC-5)
-- Local timestamp for 07:00 today
-- utc_offset = -18000 (5 hours in seconds)
-- UTC timestamp = local_timestamp - (-18000) = local_timestamp + 18000
-- So 07:00 EST = 12:00 UTC
+Clock Synchronization:
+---------------------
+The server provides serverTime (Unix timestamp) for clock drift detection.
+If local RTC differs from serverTime by more than 5 minutes, a warning is logged.
+The Pico's RTC is set to UTC via NTP; unixTime values from the server are used directly.
 
 Refresh Strategy:
 ----------------
@@ -36,8 +26,6 @@ Schedules are refreshed when:
 
 This balances freshness with network efficiency.
 """
-
-from __future__ import annotations
 
 import time
 
@@ -59,11 +47,11 @@ from network_manager import NetworkManager
 
 
 class ScheduleManager:
-    """Manages schedule fetching, caching, and timestamp computation.
+    """Manages schedule fetching, caching, and validation.
 
-    Fetches lighting schedules from the server, converts time strings to
-    unix timestamps, validates brightness values, and caches the result
-    for use by the TransitionEngine.
+    Fetches lighting schedules from the server, validates brightness values,
+    and caches the result for use by the TransitionEngine. The server provides
+    pre-computed unixTime values, eliminating client-side timestamp computation.
 
     Attributes:
         _network: NetworkManager instance for HTTP requests
@@ -71,7 +59,6 @@ class ScheduleManager:
         _api_token: Authentication token for API requests
         _refresh_hours: Hours between schedule refreshes
         _cached_schedule: List of processed schedule entries
-        _utc_offset: Seconds from UTC
         _last_fetch_time: Unix timestamp of last successful fetch
         _mode: Current schedule mode
     """
@@ -84,6 +71,9 @@ class ScheduleManager:
 
     # Default schedule mode
     DEFAULT_MODE: str = "dayNight"
+
+    # Clock drift threshold before warning (seconds) - 5 minutes
+    CLOCK_DRIFT_THRESHOLD: int = 300
 
     def __init__(
         self,
@@ -107,14 +97,13 @@ class ScheduleManager:
 
         # Internal state
         self._cached_schedule = None  # List of schedule entries with unix_time
-        self._utc_offset = 0  # Seconds from UTC (e.g., -18000 for EST)
         self._last_fetch_time = 0  # Unix timestamp of last successful fetch
 
         # Use config value or fallback to class default
         default_mode = config.DEFAULT_SCHEDULE_MODE if config else self.DEFAULT_MODE
         self._mode = default_mode  # Current schedule mode
 
-    def _validate_brightness(self, value: Any) -> bool:
+    def _validate_brightness(self, value) -> bool:
         """Validate that brightness value is within 0-100 range.
 
         Args:
@@ -129,75 +118,59 @@ class ScheduleManager:
         except (ValueError, TypeError):
             return False
 
-    def _compute_timestamps(
-        self,
-        entries: list[dict],
-        utc_offset: int
-    ) -> list[dict]:
-        """Convert time strings to unix timestamps using current date and offset.
+    def _check_clock_drift(self, server_time: int) -> None:
+        """Check for clock drift between local RTC and server time.
 
-        Takes schedule entries with "HH:MM" time strings and converts them to
-        unix timestamps for today's date, adjusted for timezone.
+        Logs a warning if the difference exceeds CLOCK_DRIFT_THRESHOLD (5 minutes).
 
         Args:
-            entries: List of dicts with 'time', 'warm'/'warmBrightness',
-                    'cool'/'coolBrightness' keys
-            utc_offset: Seconds from UTC (negative for west of UTC)
+            server_time: Unix timestamp from server response
+        """
+        local_time = int(time.time())
+        drift = abs(server_time - local_time)
+        if drift > self.CLOCK_DRIFT_THRESHOLD:
+            print(f"Warning: Clock drift detected. Server={server_time}, Local={local_time}, Drift={drift}s")
+
+    def _process_brightness_schedule(
+        self,
+        schedule: list[dict]
+    ) -> list[dict]:
+        """Process brightnessSchedule from server into internal format.
+
+        Validates required fields and normalizes brightness values from
+        0-100 to 0.0-1.0 range.
+
+        Args:
+            schedule: List of dicts with 'unixTime', 'warmBrightness',
+                     'coolBrightness', 'label' keys from server
 
         Returns:
             List of dicts with 'unix_time', 'warm', 'cool', 'label' keys,
             sorted chronologically. Invalid entries are skipped.
         """
-        now = time.time()
-        today = time.localtime(now)
-
         result: list[dict] = []
-        for entry in entries:
+        for entry in schedule:
             try:
-                # Parse time string
-                time_str = entry.get("time", "")
-                if ":" not in time_str:
-                    print(f"Invalid time format: {time_str}")
+                # Validate required fields
+                unix_time = entry.get("unixTime")
+                if unix_time is None:
+                    print(f"Missing unixTime in entry: {entry}")
                     continue
 
-                parts = time_str.split(":")
-                h = int(parts[0])
-                m = int(parts[1])
+                warm = entry.get("warmBrightness")
+                cool = entry.get("coolBrightness")
 
-                if not (0 <= h <= 23 and 0 <= m <= 59):
-                    print(f"Invalid time values: {time_str}")
+                if warm is None or cool is None:
+                    print(f"Missing brightness values in entry: {entry}")
                     continue
-
-                # Get brightness values (support both naming conventions)
-                warm = entry.get("warm", entry.get("warmBrightness", 0))
-                cool = entry.get("cool", entry.get("coolBrightness", 0))
 
                 # Validate brightness values
                 if not self._validate_brightness(warm) or not self._validate_brightness(cool):
                     print(f"Invalid brightness values: warm={warm}, cool={cool}")
                     continue
 
-                # Create timestamp for today at this time (local time)
-                # MicroPython time.mktime expects an 8-element tuple:
-                # (year, month, mday, hour, min, sec, wday, yday)
-                local_time = time.mktime((
-                    today[0],  # year
-                    today[1],  # month
-                    today[2],  # day
-                    h,         # hour
-                    m,         # minute
-                    0,         # second
-                    0,         # weekday (ignored by mktime)
-                    0          # yearday (ignored by mktime)
-                ))
-
-                # Adjust for timezone
-                # If utc_offset is -18000 (EST = UTC-5), local 07:00 = UTC 12:00
-                # unix_time = local_time - utc_offset
-                unix_time = int(local_time - utc_offset)
-
                 result.append({
-                    "unix_time": unix_time,
+                    "unix_time": int(unix_time),
                     "warm": float(warm) / 100.0,  # Convert 0-100 to 0.0-1.0
                     "cool": float(cool) / 100.0,
                     "label": entry.get("label", "")
@@ -207,7 +180,7 @@ class ScheduleManager:
                 print(f"Error processing entry {entry}: {e}")
                 continue
 
-        # Sort by unix_time
+        # Sort by unix_time (should already be sorted, but ensure it)
         result.sort(key=lambda x: x["unix_time"])
         return result
 
@@ -215,7 +188,12 @@ class ScheduleManager:
         """Fetch new schedule from server and update cache.
 
         Makes HTTP GET request to the schedule API, parses the response,
-        computes timestamps, and updates the cached schedule.
+        validates entries, and updates the cached schedule.
+
+        The server provides the unified format with:
+        - mode: Schedule mode (dayNight, scheduled, demo)
+        - serverTime: Current server Unix timestamp for clock drift detection
+        - brightnessSchedule: Array of entries with pre-computed unixTime values
 
         If the server returns mode="demo", the demo schedule from config
         is used instead of server-provided entries.
@@ -241,32 +219,30 @@ class ScheduleManager:
             if self._mode == "demo":
                 return self._setup_demo_schedule()
 
-            # Extract UTC offset (default to 0 if missing)
-            utc_offset = response.get("utc_offset", 0)
-            if utc_offset is None:
-                print("Warning: No UTC offset provided, defaulting to UTC")
-                utc_offset = 0
-            self._utc_offset = utc_offset
+            # Check clock drift using serverTime
+            server_time = response.get("serverTime")
+            if server_time is not None:
+                self._check_clock_drift(server_time)
 
-            # Get entries - support both 'entries' and 'schedule' keys
-            entries = response.get("entries", response.get("schedule", []))
+            # Get brightnessSchedule from unified format
+            schedule = response.get("brightnessSchedule", [])
 
-            if not entries:
-                print("Warning: Empty schedule received")
+            if not schedule:
+                print("Warning: Empty brightnessSchedule received")
                 return False
 
-            # Compute timestamps and validate
-            computed = self._compute_timestamps(entries, utc_offset)
+            # Process and validate entries
+            processed = self._process_brightness_schedule(schedule)
 
-            if not computed:
+            if not processed:
                 print("No valid entries after processing")
                 return False
 
             # Update cache
-            self._cached_schedule = computed
+            self._cached_schedule = processed
             self._last_fetch_time = int(time.time())
 
-            print(f"Schedule fetched: {len(computed)} entries, mode={self._mode}")
+            print(f"Schedule fetched: {len(processed)} entries, mode={self._mode}")
             return True
 
         except Exception as e:
@@ -309,7 +285,6 @@ class ScheduleManager:
 
         self._cached_schedule = entries
         self._last_fetch_time = now
-        self._utc_offset = 0  # Demo mode uses local time
 
         print(f"Demo schedule set up: {len(entries)} entries, {cycle_duration}s cycle")
         return True
@@ -388,14 +363,6 @@ class ScheduleManager:
             bool: True if schedule is cached and non-empty, False otherwise
         """
         return self._cached_schedule is not None and len(self._cached_schedule) > 0
-
-    def get_utc_offset(self) -> int:
-        """Return the current UTC offset in seconds.
-
-        Returns:
-            int: UTC offset in seconds (negative for west of UTC)
-        """
-        return self._utc_offset
 
     def get_last_fetch_time(self) -> int:
         """Return the timestamp of the last successful fetch.

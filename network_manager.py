@@ -1,3 +1,4 @@
+# pyright: reportMissingModuleSource=false, reportUnknownMemberType=false
 """Network Manager module for WiFi, NTP, and HTTP operations.
 
 This module encapsulates all network connectivity with retry logic and
@@ -63,7 +64,7 @@ We use exponential backoff to avoid overwhelming servers:
 This gives the network/server time to recover between attempts.
 """
 
-from __future__ import annotations
+from typing import Any
 
 import time
 import json
@@ -78,13 +79,11 @@ try:
     import socket
     import struct
     import machine
-    from network import WLAN
 except ImportError:
     network = None
     socket = None
     struct = None
     machine = None
-    WLAN = None
 
 try:
     import urequests as requests  # MicroPython
@@ -159,7 +158,7 @@ class NetworkManager:
         self._time_synced = False
 
         # For testing: track retry delays (used by property tests)
-        self._last_retry_delays = []
+        self._last_retry_delays: list[float] = []
 
     def connect_wifi(self, timeout: int = 30) -> bool:
         """Connect to WiFi network with timeout.
@@ -204,7 +203,7 @@ class NetworkManager:
                 time.sleep(0.5)  # Check every 500ms to balance responsiveness and CPU
 
             # Connection successful - log the assigned IP address
-            ip_address = self._wlan.ifconfig()[0]
+            ip_address: str = self._wlan.ifconfig()[0]
             print(f"Connected to WiFi '{self._ssid}'. IP: {ip_address}")
             return True
 
@@ -403,10 +402,10 @@ class NetworkManager:
         self,
         method: str,
         url: str,
-        data: dict | None = None,
+        data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         timeout: int = 10
-    ) -> dict | bool | None:
+    ) -> dict[str, Any] | bool | None:
         """Execute HTTP request with automatic retry and exponential backoff.
 
         This is the core HTTP method used by http_get() and http_post().
@@ -484,7 +483,7 @@ class NetworkManager:
         url: str,
         headers: dict[str, str] | None = None,
         timeout: int = 10
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """Perform HTTP GET request with automatic retry.
 
         Fetches JSON data from a URL with retry logic for transient failures.
@@ -506,12 +505,13 @@ class NetworkManager:
             else:
                 use_cached_schedule()
         """
-        return self._http_request_with_retry('GET', url, headers=headers, timeout=timeout)
+        result = self._http_request_with_retry('GET', url, headers=headers, timeout=timeout)
+        return result if isinstance(result, dict) else None
 
     def http_post(
         self,
         url: str,
-        data: dict,
+        data: dict[str, str],
         headers: dict[str, str] | None = None,
         timeout: int = 10
     ) -> bool:

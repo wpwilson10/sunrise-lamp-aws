@@ -204,3 +204,9 @@ cython_debug/
 # Pylance typings
 **/typings/
 **/.pyi
+
+# macOS
+.DS_Store
+
+# Ruff
+.ruff_cache/

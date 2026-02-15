@@ -23,16 +23,12 @@ For more details, see:
 - https://en.wikipedia.org/wiki/Gamma_correction
 """
 
-from __future__ import annotations
-
+# pyright: reportMissingModuleSource=false
 try:
     import machine
-    from machine import PWM, Pin
 except ImportError:
     # For desktop testing, machine module won't be available
     machine = None
-    PWM = None
-    Pin = None
 
 try:
     import config

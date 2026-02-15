@@ -3,7 +3,6 @@
 Uses hypothesis for property-based testing with minimum 100 iterations per property.
 """
 
-import pytest
 from hypothesis import given, settings, strategies as st
 
 from led_driver import LEDDriver
