@@ -295,8 +295,6 @@ def run_normal_mode() -> None:
         if controller:
             controller._log("System stopping due to keyboard interrupt", "INFO")
             controller.stop()
-        if machine is not None:
-            machine.reset()
 
     except Exception as e:
         if controller:
